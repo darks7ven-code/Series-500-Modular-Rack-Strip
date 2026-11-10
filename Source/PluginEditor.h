@@ -159,57 +159,27 @@ class RackEditor : public juce::AudioProcessorEditor, private juce::Timer
 public:
     explicit RackEditor (RackProcessor&);
     ~RackEditor() override;
-
-    void paint (juce::Graphics&) override;
     void resized() override;
-    void scrollRackTo (int px) { viewport.setViewPosition (px, 0); }   // utilisé par l'outil de test
-
+    void paint (juce::Graphics&) override;
+    void scrollRackTo(int px) { rackView.setViewPosition(0, px); }
 private:
-    class Content : public juce::Component
-    {
-    public:
-        explicit Content (RackEditor& o) : owner (o) {}
-        void paint (juce::Graphics& g) override { owner.paintContent (g); }
-        RackEditor& owner;
-    };
-    class Holder : public juce::Component
-    {
-    public:
-        explicit Holder (RackEditor& o) : owner (o) {}
-        void paint (juce::Graphics& g) override { owner.paintHolder (g); }
-        RackEditor& owner;
-    };
-    void paintContent (juce::Graphics&);
-    void paintHolder (juce::Graphics&);
-    void timerCallback() override;
-    void layoutForCount();
-    void buildStaticImages();
-
-    static constexpr int kRail = 50, kTop = 54, kPanelW = ModulePanel::kWidth, kVisible = 5, kViewW = kPanelW * kVisible,
-                         kScroll = 16, kGap = 8, kMasterW = 230, kBottom = 14,
-                         kViewH = ModulePanel::kHeight + kScroll,
-                         kContentW = 2 * kRail + kViewW + kGap + kMasterW,
-                         kH = kTop + kViewH + kBottom;
-
     RackProcessor& proc;
-    RackLnF lnf;
-    Content content { *this };
-    Holder holder { *this };
-    juce::Viewport viewport;
-    std::array<std::unique_ptr<ModulePanel>, rack::kNumSlots> panels;
-    std::unique_ptr<ModulePanel> master;
-    AddTile addTile;
-
-    juce::Slider inKnob, outKnob;
-    juce::Label inLabel, outLabel;
-    juce::ToggleButton bypassBtn { "Bypass" };
-    juce::ComboBox presetBox;
-    std::unique_ptr<juce::SliderParameterAttachment> inAtt, outAtt;
-    std::unique_ptr<juce::ButtonParameterAttachment> bypassAtt;
-    std::unique_ptr<juce::ParameterAttachment> countAtt;
-    juce::Image woodImg, topImg;
-    float dispIn = 0.f, dispOut = 0.f, scale = 0.8f;
-    int shownCount = -1;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RackEditor)
+    RackLnF skin;
+    juce::Image logo;
+    juce::TextEditor search;
+    juce::ComboBox presets;
+    juce::Viewport rackView, libraryView;
+    juce::Component rows, library;
+    juce::OwnedArray<juce::Component> libraryItems, rackItems;
+    std::unique_ptr<ModulePanel> preview;
+    juce::ToggleButton bypass {"Bypass"};
+    std::unique_ptr<juce::ButtonParameterAttachment> bypassLink;
+    juce::Slider input, output;
+    std::unique_ptr<juce::SliderParameterAttachment> inputLink, outputLink;
+    int selected = rack::kMasterSlot;
+    std::vector<int> displayed;
+    void rebuildLibrary();
+    void rebuildRack();
+    void select(int);
+    void timerCallback() override;
 };

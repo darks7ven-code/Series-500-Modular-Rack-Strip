@@ -1,4 +1,4 @@
-name: Build macOS plugin
+name: Build macOS plug-ins
 on:
   workflow_dispatch:
   push:
@@ -14,12 +14,14 @@ jobs:
       - name: Package
         run: |
           mkdir out
-          cp -R "build/RackStrip_artefacts/Release/VST3/Rack Strip.vst3" out/
-          cp -R "build/RackStrip_artefacts/Release/AU/Rack Strip.component" out/
-          codesign --force --deep -s - "out/Rack Strip.vst3"
-          codesign --force --deep -s - "out/Rack Strip.component"
-          ditto -c -k --keepParent out RackStrip-macOS.zip
+          cp -R "build/RackStrip_artefacts/Release/VST3/Series 500 Modular Rack.vst3" out/
+          cp -R "build/RackStrip_artefacts/Release/AU/Series 500 Modular Rack.component" out/
+          cp -R "build/RackStrip_artefacts/Release/Standalone/Series 500 Modular Rack.app" out/
+          codesign --force --deep -s - "out/Series 500 Modular Rack.vst3"
+          codesign --force --deep -s - "out/Series 500 Modular Rack.component"
+          codesign --force --deep -s - "out/Series 500 Modular Rack.app"
+          ditto -c -k --keepParent out Series500ModularRack-macOS.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: RackStrip-macOS
-          path: RackStrip-macOS.zip
+          name: Series500ModularRack-macOS
+          path: Series500ModularRack-macOS.zip

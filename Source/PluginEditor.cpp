@@ -452,7 +452,7 @@ void ChoiceButtons::mouseDown (const MouseEvent& e)
 //==============================================================================
 // PANNEAU DE MODULE
 //==============================================================================
-void drawScrew (Graphics& g, float x, float y, float seed)
+static void drawScrew (Graphics& g, float x, float y, float seed)
 {
     g.setColour (Colours::black.withAlpha (0.45f)); g.fillEllipse (x - 6.f, y - 4.5f, 12.f, 12.f);
     g.setGradientFill (ColourGradient (Colour (0xfff0f2f4), x - 3.f, y - 4.f, Colour (0xff5d6165), x + 4.f, y + 5.f, true));
@@ -1174,274 +1174,140 @@ void AddTile::mouseUp (const MouseEvent& e)
 //==============================================================================
 // ÉDITEUR
 //==============================================================================
-RackEditor::RackEditor (RackProcessor& p) : AudioProcessorEditor (p), proc (p)
+#include "AtelierLogo.inc"
+
+namespace {
+class LibraryButton final : public TextButton
 {
-    setLookAndFeel (&lnf);
-    addAndMakeVisible (content);
-    buildStaticImages();
-
-    viewport.setViewedComponent (&holder, false);
-    viewport.setScrollBarsShown (false, true);
-    viewport.setScrollBarThickness (kScroll);
-    content.addAndMakeVisible (viewport);
-
-    for (int s = 0; s < kNumSlots; ++s)
+public:
+    explicit LibraryButton(int t) : TextButton(info(t).name), tint(info(t).colour) {}
+    void paintButton(Graphics& g,bool over,bool down) override
     {
-        panels[(size_t) s] = std::make_unique<ModulePanel> (proc, s, kPanelW);
-        panels[(size_t) s]->onMove = [this] (int slot, int dir)
-        {
-            proc.moveModule (slot, dir);
-            for (auto& pn : panels) pn->refresh();      // resynchronise toutes les faces
-            holder.repaint();
-        };
-        panels[(size_t) s]->onRemove = [this] (int slot)
-        {
-            proc.removeModule (slot);
-            for (auto& pn : panels) pn->refresh();
-            layoutForCount();
-        };
-        holder.addChildComponent (*panels[(size_t) s]);
+        auto r=getLocalBounds().toFloat().reduced(1);
+        g.setColour(Colour(over || down ? 0xffb9dbff : 0xffe3e3e7));g.fillRoundedRectangle(r,4);
+        g.setColour(tint);g.fillRoundedRectangle(5,5,25,27,2);
+        g.setColour(Colours::silver);g.fillEllipse(11,11,13,13);
+        g.setColour(Colour(0xff191b21));g.setFont(FontOptions(12,Font::bold));
+        g.drawText(getButtonText(),36,0,getWidth()-58,getHeight(),Justification::centredLeft);
+        g.drawText("+",getWidth()-24,0,22,getHeight(),Justification::centred);
     }
-    addTile.onPick = [this] (int type)
+private:
+    Colour tint;
+};
+class Faceplate : public Component
+{
+public:
+    Faceplate(RackProcessor& p, int slot, int type, std::function<void()> choose)
+        : title(info(type).name), colour(type==Preamp ? 0xffa6a5a2 : type==Compressor ? 0xffa68c70 : type==ProEQ ? 0xff285574 : type==rack::Reverb ? 0xff45454b : info(type).colour), pick(std::move(choose))
     {
-        if (proc.addModule (type))
+        auto& params = info(type).params;
+        for (int i=0; i<(int)params.size() && knobs.size()<4; ++i)
         {
-            for (auto& pn : panels) pn->refresh();
-            layoutForCount();
+            if (params[(size_t)i].kind == Kind::Choice) continue;
+            auto* k=knobs.add(new Slider);
+            k->setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
+            k->setTextBoxStyle(Slider::NoTextBox,false,0,0);
+            k->getProperties().set("style",2);
+            addAndMakeVisible(k);
+            names.add(params[(size_t)i].name);
+            links.push_back(std::make_unique<SliderParameterAttachment>(*p.apvts.getParameter(RackProcessor::paramId(slot,i)),*k));
         }
-    };
-    holder.addChildComponent (addTile);
-
-    master = std::make_unique<ModulePanel> (proc, kMasterSlot, kMasterW);
-    content.addAndMakeVisible (*master);
-
-    auto setupKnob = [this] (Slider& k, Label& l, const String& name, const String& id, std::unique_ptr<SliderParameterAttachment>& att)
-    {
-        k.setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
-        k.setRotaryParameters (MathConstants<float>::pi * 1.2f, MathConstants<float>::pi * 2.8f, true);
-        k.setTextBoxStyle (Slider::TextBoxRight, false, 62, 16);
-        att = std::make_unique<SliderParameterAttachment> (*proc.apvts.getParameter (id), k);
-        k.textFromValueFunction = [] (double v) { return String (v, 1) + " dB"; };
-        k.updateText();
-        k.getProperties().set ("style", 3);
-        k.getProperties().set ("legend", var ((int64) 0xffd0d0d0));
-        l.setText (name, dontSendNotification);
-        l.setFont (Font (FontOptions (11.f, Font::bold).withKerningFactor (0.1f)));
-        content.addAndMakeVisible (k);
-        content.addAndMakeVisible (l);
-    };
-    setupKnob (inKnob, inLabel, "INPUT", "in_gain", inAtt);
-    setupKnob (outKnob, outLabel, "OUTPUT", "out_gain", outAtt);
-
-    presetBox.setTextWhenNothingSelected ("Chains...");
-    for (int i = 0; i < RackProcessor::numPresets(); ++i) presetBox.addItem (RackProcessor::presetName (i), i + 1);
-    presetBox.onChange = [this]
-    {
-        const int id = presetBox.getSelectedId();
-        if (id > 0)
-        {
-            proc.loadPreset (id - 1);
-            presetBox.setSelectedId (0, dontSendNotification);
-            for (auto& pn : panels) pn->refresh();
-            layoutForCount();
-        }
-    };
-    content.addAndMakeVisible (presetBox);
-
-    bypassAtt = std::make_unique<ButtonParameterAttachment> (*proc.apvts.getParameter ("bypass"), bypassBtn);
-    bypassBtn.getProperties().set ("led", var ((int64) 0xffff5a4a));
-    bypassBtn.getProperties().set ("textLeft", true);
-    content.addAndMakeVisible (bypassBtn);
-
-    countAtt = std::make_unique<ParameterAttachment> (*proc.apvts.getParameter ("count"), [this] (float) { layoutForCount(); });
-
-    content.setBounds (0, 0, kContentW, kH);
-    presetBox.setBounds (190, 14, 130, 26);
-    inLabel.setBounds (340, 8, 44, 38);   inKnob.setBounds (384, 8, 104, 38);
-    outLabel.setBounds (500, 8, 52, 38);  outKnob.setBounds (552, 8, 104, 38);
-    bypassBtn.setBounds (kContentW - 150, 12, 120, 30);
-    viewport.setBounds (kRail, kTop, kViewW, kViewH);
-    master->setBounds (kRail + kViewW + kGap, kTop, kMasterW, ModulePanel::kHeight);
-
-    const float initialScale = 0.8f;       // setResizeLimits peut redimensionner la fenêtre : on mémorise l'échelle voulue
-    setResizable (true, true);
-    setResizeLimits ((int) (kContentW * 0.5), (int) (kH * 0.5), (int) (kContentW * 1.5), (int) (kH * 1.5));
-    if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) kContentW / (double) kH);
-    setSize (roundToInt ((float) kContentW * initialScale), roundToInt ((float) kH * initialScale));
-    layoutForCount();
-    startTimerHz (24);
-}
-
-RackEditor::~RackEditor() { stopTimer(); setLookAndFeel (nullptr); }
-
-void RackEditor::buildStaticImages()
-{
-    // côtés en bois
-    {
-        const int w = 28, h = kH;
-        woodImg = Image (Image::ARGB, w * 2, h * 2, true);
-        Graphics g (woodImg);
-        g.addTransform (AffineTransform::scale (2.f));
-        ColourGradient base (Colour (0xff3b1c0d), 0, 0, Colour (0xff3b1c0d), (float) w, 0, false);
-        base.addColour (0.35, Colour (0xff7b4524));
-        base.addColour (0.7, Colour (0xff5d3118));
-        g.setGradientFill (base); g.fillAll();
-        Random rnd (11);
-        for (int k = 0; k < 130; ++k)
-        {
-            Path p;
-            const float x0 = rnd.nextFloat() * (float) w, ph = rnd.nextFloat() * 6.f, am = 0.4f + rnd.nextFloat() * 1.6f;
-            for (int y = 0; y <= h; y += 14)
-            {
-                const float x = x0 + std::sin ((float) y * 0.011f + ph) * am + std::sin ((float) y * 0.05f + ph * 2.f) * 0.3f;
-                if (y == 0) p.startNewSubPath (x, 0.f); else p.lineTo (x, (float) y);
-            }
-            g.setColour ((rnd.nextInt (3) == 0 ? Colour (0xffc58a50) : Colour (0xff1c0b04)).withAlpha (0.07f + rnd.nextFloat() * 0.1f));
-            g.strokePath (p, PathStrokeType (0.5f + rnd.nextFloat() * 1.2f));
-        }
-        g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.12f), 0, 0, Colours::transparentWhite, 7.f, 0, false));
-        g.fillRect (0.f, 0.f, 7.f, (float) h);
-        g.setGradientFill (ColourGradient (Colours::black.withAlpha (0.55f), (float) w, 0, Colours::transparentBlack, (float) w - 9.f, 0, false));
-        g.fillRect ((float) w - 9.f, 0.f, 9.f, (float) h);
+        power.setButtonText("On"); addAndMakeVisible(power);
+        powerLink=std::make_unique<ButtonParameterAttachment>(*p.apvts.getParameter(RackProcessor::onId(slot)),power);
     }
-    // barre du haut : métal brossé sombre
-    {
-        topImg = Image (Image::ARGB, kContentW * 2, kTop * 2, true);
-        Graphics g (topImg);
-        g.addTransform (AffineTransform::scale (2.f));
-        g.setGradientFill (ColourGradient (Colour (0xff35383c), 0, 0, Colour (0xff141517), 0, (float) kTop, false));
-        g.fillAll();
-        Random rnd (3);
-        for (int k = 0; k < 1500; ++k)
-        {
-            const float y = rnd.nextFloat() * (float) kTop, x = rnd.nextFloat() * (float) kContentW;
-            g.setColour ((rnd.nextBool() ? Colours::white : Colours::black).withAlpha (0.02f + rnd.nextFloat() * 0.045f));
-            g.drawLine (x, y, x + 10.f + rnd.nextFloat() * 90.f, y, 0.55f);
-        }
-        g.setColour (Colours::white.withAlpha (0.2f)); g.drawHorizontalLine (1, 0.f, (float) kContentW);
+    void mouseDown(const MouseEvent&) override { pick(); }
+    void resized() override {
+        power.setBounds(9,50,66,25);
+        int w=(getWidth()-123)/jmax(1,knobs.size());
+        for(int i=0;i<knobs.size();++i) knobs[i]->setBounds(120+i*w,23,w,53);
     }
-}
-
-void RackEditor::layoutForCount()
-{
-    const int n = proc.getNumModules();
-    const bool full = n >= kNumSlots;
-    for (int s = 0; s < kNumSlots; ++s)
-    {
-        panels[(size_t) s]->setVisible (s < n);
-        panels[(size_t) s]->setBounds (s * kPanelW, 0, kPanelW, ModulePanel::kHeight);
+    void paint(Graphics& g) override {
+        auto r=getLocalBounds().toFloat().reduced(2);
+        auto c=colour.interpolatedWith(Colours::lightgrey,0.30f);
+        g.setGradientFill(ColourGradient(c.brighter(.32f),0,0,c.darker(.45f),0,r.getBottom(),false));
+        g.fillRoundedRectangle(r,4);
+        g.setColour(Colours::white); g.setFont(FontOptions(14,Font::bold));
+        g.drawFittedText(title,10,15,104,33,Justification::centredLeft,2);
+        g.setFont(11.f);
+        for(int i=0;i<knobs.size();++i) g.drawText(names[i],knobs[i]->getX(),7,knobs[i]->getWidth(),17,Justification::centred);
+        drawScrew(g,8,8,1); drawScrew(g,r.getRight()-6,r.getBottom()-6,2);
     }
-    addTile.setVisible (! full);
-    addTile.setBounds (n * kPanelW, 0, kPanelW, ModulePanel::kHeight);
-
-    const int cells = jmax (kVisible, n + (full ? 0 : 1));
-    holder.setSize (cells * kPanelW, ModulePanel::kHeight);
-    if (n > shownCount && shownCount >= 0)      // un module vient d'être ajouté : on fait défiler jusqu'à lui
-        viewport.setViewPosition (jmax (0, (n + (full ? 0 : 1)) * kPanelW - kViewW), 0);
-    shownCount = n;
-    holder.repaint();
-    content.repaint();
+private:
+    String title; Colour colour; std::function<void()> pick; StringArray names;
+    OwnedArray<Slider> knobs; std::vector<std::unique_ptr<SliderParameterAttachment>> links;
+    ToggleButton power; std::unique_ptr<ButtonParameterAttachment> powerLink;
+};
 }
 
-void RackEditor::resized()
+RackEditor::RackEditor(RackProcessor& p): AudioProcessorEditor(p),proc(p)
 {
-    if (getWidth() <= 0) return;
-    scale = (float) getWidth() / (float) kContentW;
-    content.setTransform (AffineTransform::scale (scale));
-    content.setBounds (0, 0, kContentW, kH);
+    setLookAndFeel(&skin);
+    logo=ImageFileFormat::loadFrom(Assets_Atelier500_png,Assets_Atelier500_png_len);
+    for(Component* c : std::initializer_list<Component*>{&search,&presets,&rackView,&libraryView,&bypass,&input,&output}) addAndMakeVisible(c);
+    rackView.setViewedComponent(&rows,false); libraryView.setViewedComponent(&library,false);
+    search.setTextToShowWhenEmpty("Search modules...",Colours::grey);
+    search.onTextChange=[this]{rebuildLibrary();};
+    for(int i=0;i<proc.numPresets();++i) presets.addItem(proc.presetName(i),i+1);
+    presets.setTextWhenNothingSelected("Rack presets");
+    presets.onChange=[this]{proc.loadPreset(presets.getSelectedId()-1);rebuildRack();};
+    bypassLink=std::make_unique<ButtonParameterAttachment>(*proc.apvts.getParameter("bypass"),bypass);
+    for(auto* k:{&input,&output}) { k->setSliderStyle(Slider::LinearHorizontal);k->setTextBoxStyle(Slider::TextBoxRight,false,55,18);k->setTextValueSuffix(" dB"); }
+    inputLink=std::make_unique<SliderParameterAttachment>(*proc.apvts.getParameter("in_gain"),input);
+    outputLink=std::make_unique<SliderParameterAttachment>(*proc.apvts.getParameter("out_gain"),output);
+    if(proc.getNumModules()>0) selected=0;
+    setSize(1030,740); rebuildLibrary();rebuildRack();startTimerHz(15);
 }
-
-void RackEditor::paint (Graphics& g) { g.fillAll (Colour (0xff0b0b0c)); }
-
-void RackEditor::timerCallback()
-{
-    dispIn  = jmax (proc.inPeak.load(),  dispIn  * 0.88f);
-    dispOut = jmax (proc.outPeak.load(), dispOut * 0.88f);
-    content.repaint (0, 0, kContentW, kTop);
-}
-
-void RackEditor::paintHolder (Graphics& g)
-{
-    g.fillAll (Colour (0xff0a0a0b));
-    const int n = proc.getNumModules();
-    // plaques de fermeture vierges, comme dans un vrai rack
-    for (int c = n + 1; c < holder.getWidth() / kPanelW; ++c)
-    {
-        auto r = Rectangle<float> ((float) (c * kPanelW) + 2.f, 0.f, (float) kPanelW - 4.f, (float) ModulePanel::kHeight);
-        g.setGradientFill (ColourGradient (Colour (0xff2c2e31), 0, 0, Colour (0xff181a1c), 0, r.getBottom(), false));
-        g.fillRect (r);
-        Random rnd (c * 13);
-        for (int k = 0; k < 500; ++k)
-        {
-            g.setColour ((rnd.nextBool() ? Colours::white : Colours::black).withAlpha (0.02f + rnd.nextFloat() * 0.04f));
-            const float y = rnd.nextFloat() * r.getHeight(), x = r.getX() + rnd.nextFloat() * r.getWidth();
-            g.drawLine (x, y, x + 12.f + rnd.nextFloat() * 60.f, y, 0.5f);
-        }
-        g.setColour (Colours::white.withAlpha (0.2f)); g.drawHorizontalLine (1, r.getX(), r.getRight());
-        g.setColour (Colours::black.withAlpha (0.7f)); g.drawRect (r, 1.5f);
-        for (int i = 0; i < 4; ++i)
-            drawScrew (g, r.getX() + ((i % 2 == 0) ? 14.f : r.getWidth() - 14.f), (i < 2) ? 12.f : r.getBottom() - 12.f, (float) (i + c));
+RackEditor::~RackEditor(){stopTimer();setLookAndFeel(nullptr);}
+void RackEditor::rebuildLibrary(){
+    libraryItems.clear();int y=0;
+    for(int t=1;t<BusComp;++t){
+        if(!String(info(t).name).containsIgnoreCase(search.getText()))continue;
+        auto* b=new LibraryButton(t); libraryItems.add(b);library.addAndMakeVisible(b);
+        b->setBounds(3,y,187,37);y+=41;
+        b->onClick=[this,t]{if(proc.addModule(t)){selected=proc.getNumModules()-1;rebuildRack();rackView.setViewPosition(0,selected*84);}};
     }
-    if (n == 0)
-    {
-        g.setColour (Colours::white.withAlpha (0.3f));
-        g.setFont (Font (FontOptions (16.f)));
-        g.drawFittedText ("Your rack is empty.\n\nClick  +  to add a module, or pick a ready-made chain at the top.",
-                          kPanelW + 20, 230, kPanelW * 3 - 40, 120, Justification::centredLeft, 4);
-    }
+    library.setSize(193,jmax(1,y));
 }
-
-void RackEditor::paintContent (Graphics& g)
-{
-    g.fillAll (Colour (0xff0b0b0c));
-
-    // barre du haut
-    g.setImageResamplingQuality (Graphics::highResamplingQuality);
-    g.drawImage (topImg, 0, 0, kContentW, kTop, 0, 0, topImg.getWidth(), topImg.getHeight());
-    g.setColour (Colours::black); g.drawHorizontalLine (kTop - 1, 0.f, (float) kContentW);
-    auto engrave = [&g] (const String& t, Rectangle<int> r, Font f, Colour c, Justification j)
-    {
-        g.setFont (f);
-        g.setColour (Colours::black.withAlpha (0.85f)); g.drawText (t, r.translated (0, 1), j);
-        g.setColour (c); g.drawText (t, r, j);
-    };
-    engrave ("RACK STRIP", { 18, 5, 170, 28 }, Font (FontOptions (22.f, Font::bold).withKerningFactor (0.14f)), Colour (0xfff0e6cf), Justification::centredLeft);
-    engrave ("MODULAR CHANNEL CHAIN", { 18, 32, 170, 14 }, Font (FontOptions (8.5f, Font::bold).withKerningFactor (0.16f)), Colour (0xffe0a03a), Justification::centredLeft);
-
-    auto meter = [&g] (float v, int x, int y)
-    {
-        const float db = Decibels::gainToDecibels (v, -60.f);
-        const float frac = jlimit (0.f, 1.f, (db + 60.f) / 60.f);
-        g.setColour (Colour (0xff060708)); g.fillRoundedRectangle ((float) x, (float) y, 100.f, 8.f, 2.f);
-        g.setColour (db > -1.f ? Colour (0xffff4040) : (db > -12.f ? Colour (0xffffb23e) : Colour (0xff4cff7a)));
-        g.fillRoundedRectangle ((float) x, (float) y, 100.f * frac, 8.f, 2.f);
-        g.setColour (Colours::white.withAlpha (0.15f)); g.drawRoundedRectangle ((float) x, (float) y, 100.f, 8.f, 2.f, 1.f);
-    };
-    const int mx = kContentW - 290;
-    meter (dispIn, mx, 14);
-    meter (dispOut, mx, 31);
-    g.setColour (Colours::white.withAlpha (0.6f));
-    g.setFont (Font (FontOptions (9.f, Font::bold)));
-    g.drawText ("IN", mx - 30, 12, 26, 10, Justification::centredRight);
-    g.drawText ("OUT", mx - 34, 29, 30, 10, Justification::centredRight);
-
-    // côtés en bois + rails de rack percés
-    g.drawImage (woodImg, 0, kTop, 28, kH - kTop, 0, 0, woodImg.getWidth(), woodImg.getHeight());
-    g.drawImage (woodImg, kContentW - 28, kTop, 28, kH - kTop, 0, 0, woodImg.getWidth(), woodImg.getHeight());
-    for (int side = 0; side < 2; ++side)
-    {
-        const int x = side == 0 ? 28 : kContentW - kRail;
-        g.setGradientFill (ColourGradient (Colour (0xff4a4d52), (float) x, 0, Colour (0xff25272a), (float) (x + 22), 0, false));
-        g.fillRect (x, kTop, 22, kH - kTop);
-        g.setColour (Colours::white.withAlpha (0.15f)); g.drawVerticalLine (x + 1, (float) kTop, (float) kH);
-        g.setColour (Colour (0xff050506));
-        for (int y = kTop + 28; y < kH - 14; y += 62)
-            g.fillRoundedRectangle ((float) x + 5.f, (float) y, 12.f, 20.f, 4.f);
-    }
-    // base du rack
-    g.setGradientFill (ColourGradient (Colour (0xff3b1c0d), 0, (float) kH - kBottom, Colour (0xff1c0d06), 0, (float) kH, false));
-    g.fillRect (0, kH - kBottom, kContentW, kBottom);
-    // séparation entre le rack défilant et le bus maître
-    g.setColour (Colour (0xff050506)); g.fillRect (kRail + kViewW, kTop, kGap, kViewH);
+void RackEditor::select(int slot){
+    selected=slot;
+    preview=std::make_unique<ModulePanel>(proc,slot,217);
+    preview->onMove=[this](int s,int d){proc.moveModule(s,d);selected=jlimit(0,proc.getNumModules()-1,s+d);displayed.clear();};
+    preview->onRemove=[this](int s){proc.removeModule(s);};
+    addAndMakeVisible(*preview);preview->setBounds(getWidth()-226,78,217,620);
 }
-
+void RackEditor::rebuildRack(){
+    rackItems.clear();displayed.clear();int n=proc.getNumModules();
+    for(int i=0;i<=n;++i){
+        int s=i==n?kMasterSlot:i,t=i==n?BusComp:proc.getSlotType(i);
+        auto* row=new Faceplate(proc,s,t,[this,s]{select(s);});
+        rackItems.add(row);rows.addAndMakeVisible(row);row->setBounds(0,i*84,rackView.getWidth()-14,82);
+        if(i<n)displayed.push_back(t);
+    }
+    rows.setSize(rackView.getWidth()-14,(n+1)*84);select(selected<n?selected:kMasterSlot);repaint();
+}
+void RackEditor::timerCallback(){
+    bool diff=(int)displayed.size()!=proc.getNumModules();
+    for(int i=0;!diff && i<(int)displayed.size();++i) diff=displayed[(size_t)i]!=proc.getSlotType(i);
+    if(diff)rebuildRack();
+    repaint(0,getHeight()-36,getWidth(),36);
+}
+void RackEditor::resized(){
+    search.setBounds(10,83,185,29);libraryView.setBounds(6,119,197,getHeight()-167);
+    presets.setBounds(getWidth()/2-96,10,190,32);bypass.setBounds(getWidth()-105,10,92,32);
+    rackView.setBounds(212,79,getWidth()-452,getHeight()-124);
+    input.setBounds(47,getHeight()-30,166,25);output.setBounds(getWidth()-199,getHeight()-30,188,25);
+}
+void RackEditor::paint(Graphics& g){
+    g.fillAll(Colour(0xff202226));
+    g.setGradientFill(ColourGradient(Colour(0xffe7e7eb),0,0,Colour(0xffb8b8c0),0,52,false));g.fillRect(0,0,getWidth(),52);
+    g.drawImageWithin(logo,13,1,164,50,RectanglePlacement::centred);
+    g.setColour(Colour(0xffc9c9cf));g.fillRect(0,52,204,getHeight()-88);
+    g.setColour(Colours::black);g.setFont(FontOptions(14,Font::bold));g.drawText("MODULE BROWSER",10,54,180,27,Justification::centredLeft);
+    g.setColour(Colours::white);g.drawText("SIGNAL CHAIN",220,52,160,26,Justification::centredLeft);
+    g.drawText(String(proc.getNumModules())+" / 16",getWidth()-318,52,65,26,Justification::centredRight);
+    g.drawText("MODULE PREVIEW",getWidth()-224,52,217,26,Justification::centredLeft);
+    int y=getHeight()-36;g.setColour(Colour(0xff15171a));g.fillRect(0,y,getWidth(),36);
+    g.setColour(Colours::white);g.setFont(11.f);g.drawText("INPUT",7,y,46,36,Justification::centredLeft);
+    g.drawText("OUTPUT",getWidth()-250,y,52,36,Justification::centredLeft);
+    for(int i=0;i<2;++i){float peak=i?proc.outPeak.load():proc.inPeak.load();g.setColour(Colour(0xff378dec));g.fillRect(245,y+9+11*i,roundToInt(480.f*jlimit(0.f,1.f,peak)),6);}
+}

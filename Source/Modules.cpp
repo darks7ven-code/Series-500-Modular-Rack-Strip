@@ -20,7 +20,7 @@ float ParamDef::toReal (float norm) const
     {
         case Kind::Choice: return (float) juce::roundToInt (norm * (float) juce::jmax (1, numChoices() - 1));
         case Kind::Log:    return mn * std::pow (mx / mn, norm);
-        default:           return mn + (mx - mn) * norm;
+        case Kind::Lin:    return mn + (mx - mn) * norm;
     }
 }
 
@@ -31,7 +31,7 @@ float ParamDef::toNorm (float real) const
     {
         case Kind::Choice: n = real / (float) juce::jmax (1, numChoices() - 1); break;
         case Kind::Log:    n = std::log (juce::jmax (real, mn) / mn) / std::log (mx / mn); break;
-        default:           n = (real - mn) / (mx - mn); break;
+        case Kind::Lin:    n = (real - mn) / (mx - mn); break;
     }
     return juce::jlimit (0.f, 1.f, n);
 }
@@ -57,6 +57,7 @@ constexpr float kPi = 3.14159265358979f;
 inline float dbToGain (float db) { return std::pow (10.f, db / 20.f); }
 inline float gainToDb (float g)  { return 20.f * std::log10 (juce::jmax (g, 1.0e-6f)); }
 inline int chans (const juce::AudioBuffer<float>& b) { return juce::jmin (2, b.getNumChannels()); }
+inline bool changed (float a, float b) { return std::abs (a - b) > 1.0e-6f; }
 
 // Filtre biquad (RBJ), sans allocation, état séparé par canal
 struct Bq
@@ -179,12 +180,13 @@ public:
         const int model = (int) v[0];
         const float drive = v[1], tone = v[2];
         const float g = 1.f + drive * 0.08f;
+        const float input = dbToGain(v[4]) * (v[5] < 0.5f ? -1.f : 1.f);
 
         const float key = (float) model * 1000.f + drive;
-        if (key != lastKey) { comp = satCompensation ([model] (float x) { return shapePre (model, x); }, g); lastKey = key; }
+        if (changed (key, lastKey)) { comp = satCompensation ([model] (float x) { return shapePre (model, x); }, g); lastKey = key; }
 
         const float tkey = (float) model * 100.f + tone;
-        if (tkey != lastTone)
+        if (changed (tkey, lastTone))
         {
             const float fl = model == 1 ? 150.f : 220.f, fh = model == 1 ? 2500.f : (model == 2 ? 4500.f : 3500.f);
             lo.lowShelf (sr, fl, 0.7f, -tone * 0.5f);
@@ -200,7 +202,7 @@ public:
             auto* d = b.getWritePointer (ch);
             for (int i = 0; i < n; ++i)
             {
-                const float y = shapePre (model, d[i] * g) * comp;
+                const float y = shapePre (model, d[i] * input * g) * comp;
                 float yd = y - dcx[ch] + dcR * dcy[ch];
                 dcx[ch] = y; dcy[ch] = yd;
                 yd = hi.tick (ch, lo.tick (ch, yd));
@@ -239,7 +241,7 @@ public:
     void process (juce::AudioBuffer<float>& b, const float* v) override
     {
         bool changed = false;
-        for (int i = 0; i < 7; ++i) if (v[i] != last[i]) { changed = true; last[i] = v[i]; }
+        for (int i = 0; i < 7; ++i) if (rack::changed (v[i], last[i])) { changed = true; last[i] = v[i]; }
         if (changed) setupConsoleEq (band, v, sr);
         const int n = b.getNumSamples();
         for (int ch = 0; ch < chans (b); ++ch)
@@ -274,7 +276,7 @@ public:
     void process (juce::AudioBuffer<float>& b, const float* v) override
     {
         bool changed = false;
-        for (int i = 0; i < 12; ++i) if (v[i] != last[i]) { changed = true; last[i] = v[i]; }
+        for (int i = 0; i < 12; ++i) if (rack::changed (v[i], last[i])) { changed = true; last[i] = v[i]; }
         if (changed) setupProEq (band, v, sr);
         const int n = b.getNumSamples();
         for (int ch = 0; ch < chans (b); ++ch)
@@ -404,7 +406,7 @@ public:
 
     void process (juce::AudioBuffer<float>& b, const float* v) override
     {
-        if (v[0] != lastF) { hpf.hp (sr, v[0], 0.7f); lastF = v[0]; }
+        if (changed (v[0], lastF)) { hpf.hp (sr, v[0], 0.7f); lastF = v[0]; }
         const float thr = v[1], amount = v[2];
         const float attC = std::exp (-1.f / (0.002f * (float) sr)), relC = std::exp (-1.f / (0.04f * (float) sr));
         const float detC = std::exp (-1.f / (0.02f * (float) sr));
@@ -449,8 +451,8 @@ public:
         const float g = dbToGain (driveDb);
 
         const float key = (float) type * 1000.f + driveDb;
-        if (key != lastKey) { comp = satCompensation ([type] (float x) { return shapeSat (type, x); }, g); lastKey = key; }
-        if (tone != lastTone)
+        if (changed (key, lastKey)) { comp = satCompensation ([type] (float x) { return shapeSat (type, x); }, g); lastKey = key; }
+        if (changed (tone, lastTone))
         {
             lo.lowShelf (sr, 200.f, 0.7f, -tone * 0.5f);
             hi.highShelf (sr, 3500.f, 0.7f, tone * 0.5f);
@@ -491,13 +493,13 @@ public:
     {
         const float hpF = v[0], lpF = v[1];
         const int slope = (int) v[2];
-        if (hpF != lastHp || slope != (int) lastSlope)
+        if (changed (hpF, lastHp) || (int) slope != (int) lastSlope)
         {
             if (slope == 1) { hp1.hp (sr, hpF, 0.5412f); hp2.hp (sr, hpF, 1.3066f); }
             else            { hp1.hp (sr, hpF, 0.7071f); }
             lastHp = hpF;
         }
-        if (lpF != lastLp || slope != (int) lastSlope)
+        if (changed (lpF, lastLp) || (int) slope != (int) lastSlope)
         {
             if (slope == 1) { lp1.lp (sr, lpF, 0.5412f); lp2.lp (sr, lpF, 1.3066f); }
             else            { lp1.lp (sr, lpF, 0.7071f); }
@@ -784,7 +786,9 @@ const ModuleInfo& info (int type)
             { { "Model", 0, 2, 1, C, "", "SSL|Neve|API", 0 },
               { "Drive", 0, 100, 25, L, "%", nullptr, 0 },
               { "Tone", -6, 6, 0, L, "dB", nullptr, 1 },
-              { "Output", -12, 12, 0, L, "dB", nullptr, 1 } }, mk<PreampMod> });
+              { "Output", -12, 12, 0, L, "dB", nullptr, 1 },
+              { "Gain", -20, 20, 0, L, "dB", nullptr, 1 },
+              { "Polarity", 0, 1, 1, C, "", "Invert|Normal", 0 } }, mk<PreampMod> });
 
         t.push_back ({ "CONSOLE EQ", "4-BAND CONSOLE EQ", 0xff2f5f86,
             { { "Model", 0, 2, 0, C, "", "SSL|Neve|API", 0 },

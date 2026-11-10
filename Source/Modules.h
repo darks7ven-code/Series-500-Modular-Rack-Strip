@@ -6,7 +6,7 @@
 
 namespace rack
 {
-constexpr int kNumSlots = 12;                 // modules ajoutables
+constexpr int kNumSlots = 16;                 // modules ajoutables
 constexpr int kMasterSlot = kNumSlots;        // bus compresseur maître, toujours en fin de chaîne
 constexpr int kTotalSlots = kNumSlots + 1;
 constexpr int kMaxParams = 12;

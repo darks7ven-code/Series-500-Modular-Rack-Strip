@@ -1,5 +1,5 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
+#include "AtelierEditor.h"
 
 using namespace rack;
 
@@ -253,7 +253,8 @@ const std::vector<Preset>& presets()
             { Compressor, { { 0, 0.f }, { 1, -14.f }, { 2, 2.f }, { 3, 30.f }, { 4, 200.f }, { 5, 2.f } } },
             { Saturation, { { 0, 0.f }, { 1, 3.f }, { 3, 50.f } } },
             { Stereo,     { { 0, 110.f } } },
-            { Limiter,    { { 1, -0.5f } } } } }
+            { Limiter,    { { 1, -0.5f } } } } },
+        { "Atelier 500", { { Preamp, {} }, { ProEQ, {} }, { Compressor, {} }, { Reverb, {} } } }
     };
     return p;
 }
@@ -294,5 +295,5 @@ void RackProcessor::setStateInformation (const void* data, int size)
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
-juce::AudioProcessorEditor* RackProcessor::createEditor() { return new RackEditor (*this); }
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new RackProcessor(); }
+juce::AudioProcessorEditor* RackProcessor::createEditor() { return new AtelierEditor (*this); }
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { auto* p = new RackProcessor(); p->loadPreset(RackProcessor::numPresets()-1); return p; }

@@ -1,0 +1,26 @@
+name: Build Windows plug-ins
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item -Recurse "build/RackStrip_artefacts/Release/VST3/Series 500 Modular Rack.vst3" out/
+          Copy-Item "build/RackStrip_artefacts/Release/Standalone/Series 500 Modular Rack.exe" out/
+          Compress-Archive -Path out/* -DestinationPath Series500ModularRack-Windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Series500ModularRack-Windows
+          path: Series500ModularRack-Windows.zip

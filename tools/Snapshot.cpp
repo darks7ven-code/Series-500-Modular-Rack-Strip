@@ -58,6 +58,9 @@ int main()
 
     snap (p, "0_empty");
 
+    p.loadPreset(0);
+    for (auto t : { Preamp, ProEQ, Compressor, rack::Reverb }) p.addModule(t);
+    snap(p, "atelier500");
     // 1 : Neve / Opto / FET / ProEQ + bus SSL
     p.addModule (Preamp);      setReal (p, 0, 0, 1); setReal (p, 0, 1, 55);
     p.addModule (ConsoleEQ);   setReal (p, 1, 0, 1); setReal (p, 1, 1, 4); setReal (p, 1, 6, 5);
